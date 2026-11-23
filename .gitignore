@@ -1,0 +1,14 @@
+# Generated build files
+build/
+build-*/
+
+# Local IntelliSense configuration
+.vscode/c_cpp_properties.json
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Private credentials
+.env
+wifi_credentials.h
