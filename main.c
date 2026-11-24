@@ -10,6 +10,7 @@
 #include "motor_pwm.h"
 #include "motor_oled.h"
 #include "gpio_buttons.h"
+#include "motor_encoder.h"
 
 // =====================================================
 // GROUP 1 - MOTOR CONTROLLER
@@ -38,6 +39,9 @@ static void print_status(void) {
 
     waveform_get_phases(&a, &b, &c);
 
+    float encoder_hz =
+        (motor.rpm * ENCODER_PPR) / 60.0f;
+
     printf("\n================================\n");
     printf("GROUP 1 MOTOR CONTROLLER\n");
     printf("================================\n");
@@ -55,6 +59,7 @@ static void print_status(void) {
 
     printf("SLIP FACTOR: %.2f\n", motor.slip_factor);
 
+    // Three-phase waveform status
     printf("\nTHREE-PHASE PWM\n");
     printf("PHASE A: %+.3f\n", a);
     printf("PHASE B: %+.3f\n", b);
@@ -66,6 +71,25 @@ static void print_status(void) {
     );
 
     printf("PWM PINS: GP14 / GP15 / GP16\n");
+
+    // Rotary encoder status
+    printf("\nROTARY ENCODER\n");
+    printf("ENCODER PPR: %d\n", ENCODER_PPR);
+    printf("ENCODER FREQUENCY: %.2f Hz\n", encoder_hz);
+
+    printf(
+        "ENCODER DIRECTION: %s\n",
+        motor.reverse_direction ? "CCW" : "CW"
+    );
+
+    printf(
+        "ENCODER COMMAND: %s\n",
+        motor.rpm > 0.0f ? "ACTIVE" : "OFF"
+    );
+
+    printf("ENCODER A: GP20\n");
+    printf("ENCODER B: GP21\n");
+
     printf("================================\n");
 }
 
@@ -80,47 +104,90 @@ int main(void) {
     // Initialize operator inputs
     gpio_buttons_init();
 
+    // Initialize three-phase PWM
+    pwm_init_three_phase();
+
     // Initialize motor data
     motor_control_init();
+    sync_waveform_with_motor();
+
+    // Initialize rotary encoder
+    motor_encoder_init();
+    motor_encoder_update();
 
     // Initialize OLED
     motor_oled_init();
 
-    // Initialize PWM
-    pwm_init_three_phase();
-    sync_waveform_with_motor();
-
     // Start waveform timer
-    bool timer_ok = waveform_timer_start();
+    bool waveform_timer_ok = waveform_timer_start();
 
-    if (!timer_ok) {
+    if (!waveform_timer_ok) {
+
         printf("ERROR: Waveform timer failed\n");
 
+        waveform_emergency_off();
+        motor_encoder_stop();
+
         while (true) {
-            waveform_emergency_off();
             sleep_ms(100);
         }
     }
 
+    // Start rotary encoder timer
+    bool encoder_timer_ok = motor_encoder_start();
+
+    if (!encoder_timer_ok) {
+
+        printf("ERROR: Encoder timer failed\n");
+
+        waveform_emergency_off();
+        motor_encoder_stop();
+
+        while (true) {
+            sleep_ms(100);
+        }
+    }
+
+    // Check emergency stop at startup
+    if (estop_is_pressed()) {
+        emergency_stop();
+        motor_encoder_stop();
+    }
+
+    oled_show_motor();
+
     sleep_ms(2000);
+
+    // =================================================
+    // STARTUP INFORMATION
+    // =================================================
 
     printf("\n================================\n");
     printf("GROUP 1 MOTOR CONTROLLER\n");
     printf("PICO 2W - THREE-PHASE PWM\n");
     printf("================================\n");
 
+    printf("OPERATOR CONTROL PANEL\n");
     printf("START: GP10\n");
     printf("STOP: GP11\n");
     printf("E-STOP: GP12\n");
     printf("DIRECTION: GP13\n");
     printf("RESET: GP18\n");
 
+    printf("\nTHREE-PHASE PWM\n");
     printf("PHASE A: GP14\n");
     printf("PHASE B: GP15\n");
     printf("PHASE C: GP16\n");
 
+    printf("\nROTARY ENCODER\n");
+    printf("ENCODER A: GP20\n");
+    printf("ENCODER B: GP21\n");
+    printf("ENCODER PPR: %d\n", ENCODER_PPR);
+
+    printf("\nMOTOR CONFIGURATION\n");
     printf("FREQUENCY: 50-60 HZ\n");
     printf("RAMP RATE: 0.1 HZ/SEC\n");
+    printf("SLIP FACTOR: 0.95\n");
     printf("PWM UPDATE: 5000 HZ\n");
 
     printf("================================\n");
@@ -140,13 +207,21 @@ int main(void) {
 
         uint32_t now_ms = current_ms();
 
-        // Emergency Stop
+        // =============================================
+        // EMERGENCY STOP
+        // =============================================
+
         if (estop_is_pressed() &&
             motor.state != MOTOR_ESTOP) {
+
             emergency_stop();
+            motor_encoder_stop();
         }
 
-        // Read buttons
+        // =============================================
+        // READ OPERATOR BUTTONS
+        // =============================================
+
         bool start_event =
             start_button_pressed(now_ms);
 
@@ -156,12 +231,20 @@ int main(void) {
         bool reset_event =
             reset_button_pressed(now_ms);
 
-        // Reset
+        // =============================================
+        // RESET
+        // =============================================
+
         if (reset_event) {
             reset_motor();
         }
 
-        // Direction switch
+        // =============================================
+        // DIRECTION SWITCH
+        // =============================================
+
+        // Direction can only change while motor is IDLE
+
         if (motor.state == MOTOR_IDLE) {
 
             bool reverse = direction_is_reverse();
@@ -169,7 +252,9 @@ int main(void) {
             if (reverse != motor.reverse_direction) {
 
                 motor.reverse_direction = reverse;
+
                 sync_waveform_with_motor();
+                motor_encoder_update();
 
                 printf(
                     "DIRECTION CHANGED: %s\n",
@@ -180,19 +265,35 @@ int main(void) {
             }
         }
 
-        // Start / Stop
+        // =============================================
+        // START AND NORMAL STOP
+        // =============================================
+
         if (motor.state != MOTOR_ESTOP &&
             !estop_is_pressed()) {
 
-            if (start_event) {
-                start_motor();
-            }
-            else if (stop_event) {
+            // Give STOP priority over START
+            if (stop_event) {
                 normal_stop();
+            }
+            else if (start_event && !reset_event) {
+
+                motor_state_t previous_state = motor.state;
+
+                start_motor();
+
+                if (previous_state == MOTOR_IDLE &&
+                    motor.state == MOTOR_STARTUP) {
+
+                    last_update_ms = now_ms;
+                }
             }
         }
 
-        // Frequency ramp
+        // =============================================
+        // MOTOR FREQUENCY RAMP
+        // =============================================
+
         if ((uint32_t)(now_ms - last_update_ms)
             >= UPDATE_MS) {
 
@@ -201,22 +302,37 @@ int main(void) {
                 / 1000.0f;
 
             update_motor(dt);
+
             last_update_ms = now_ms;
         }
 
-        // OLED update
+        // =============================================
+        // ROTARY ENCODER UPDATE
+        // =============================================
+
+        motor_encoder_update();
+
+        // =============================================
+        // OLED DISPLAY UPDATE
+        // =============================================
+
         if ((uint32_t)(now_ms - last_display_ms)
             >= DISPLAY_MS) {
 
             oled_show_motor();
+
             last_display_ms = now_ms;
         }
 
-        // USB serial status
+        // =============================================
+        // USB SERIAL STATUS
+        // =============================================
+
         if ((uint32_t)(now_ms - last_print_ms)
             >= PRINT_MS) {
 
             print_status();
+
             last_print_ms = now_ms;
         }
 

@@ -25,6 +25,7 @@ add_executable(Motor_Controller
     motor_pwm.c
     motor_oled.c
     gpio_buttons.c
+    motor_encoder.c
 )
 
 target_link_libraries(Motor_Controller

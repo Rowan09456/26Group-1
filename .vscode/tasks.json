@@ -1,0 +1,50 @@
+
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Compile Project",
+            "type": "process",
+            "command": "${env:USERPROFILE}/.pico-sdk/cmake/v4.3.4/bin/cmake.exe",
+            "args": [
+                "--build",
+                "${workspaceFolder}/build"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PICO_SDK_PATH": "${env:USERPROFILE}/.pico-sdk/sdk/2.3.1"
+                }
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Run Project",
+            "type": "process",
+            "command": "${env:USERPROFILE}/.pico-sdk/picotool/2.3.1/picotool/picotool.exe",
+            "args": [
+                "load",
+                "${workspaceFolder}/build/Motor_Controller.uf2",
+                "-f",
+                "-x"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "Compile Project",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        }
+    ]
+}
