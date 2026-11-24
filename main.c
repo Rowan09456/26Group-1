@@ -11,6 +11,8 @@
 #include "motor_oled.h"
 #include "gpio_buttons.h"
 #include "motor_encoder.h"
+#include "motor_http.h"
+#include "motor_rtc.h"
 
 // =====================================================
 // GROUP 1 - MOTOR CONTROLLER
@@ -153,6 +155,9 @@ int main(void) {
         emergency_stop();
         motor_encoder_stop();
     }
+    motor_rtc_init();
+
+    motor_http_init();
 
     oled_show_motor();
 
@@ -311,7 +316,7 @@ int main(void) {
         // =============================================
 
         motor_encoder_update();
-
+        motor_http_update(&motor);
         // =============================================
         // OLED DISPLAY UPDATE
         // =============================================
@@ -328,13 +333,14 @@ int main(void) {
         // USB SERIAL STATUS
         // =============================================
 
-        if ((uint32_t)(now_ms - last_print_ms)
-            >= PRINT_MS) {
+        if ((uint32_t)(now_ms - last_print_ms) >= PRINT_MS)
+{
+    print_status();
 
-            print_status();
+    motor_rtc_print();
 
-            last_print_ms = now_ms;
-        }
+    last_print_ms = now_ms;
+}
 
         sleep_ms(5);
     }

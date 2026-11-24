@@ -12,3 +12,4 @@ __pycache__/
 # Private credentials
 .env
 wifi_credentials.h
+secrets.h
